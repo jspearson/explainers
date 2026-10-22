@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>How an Engine Works</title><link rel="stylesheet" href="../style.css"></head><body>
+<header><a href="../">← All explainers</a><h1>🔧 How an engine works</h1></header>
+<div class="wrap"><div class="card">
+<svg id="dia" viewBox="0 0 400 460">
+<rect width="400" height="460" rx="12" fill="#121a2c"/>
+<g class="part" data-p="cool"><rect x="100" y="70" width="200" height="200" fill="none" stroke="#3ec7ff" stroke-width="10" opacity=".35"/></g>
+<g class="part" data-p="cyl"><rect x="130" y="80" width="140" height="190" fill="#2b3550" stroke="#5b6a90" stroke-width="4"/></g>
+<rect id="gas" x="132" y="82" width="136" height="60" fill="#3ec7ff" opacity=".25"/>
+<g class="part" data-p="cam"><circle cx="150" cy="34" r="12" fill="#555"/><ellipse id="cam1" cx="150" cy="34" rx="9" ry="15" fill="#888"/><circle cx="250" cy="34" r="12" fill="#555"/><ellipse id="cam2" cx="250" cy="34" rx="9" ry="15" fill="#888"/></g>
+<g class="part" data-p="intake"><path d="M60 95 H140" stroke="#3ec7ff" stroke-width="18" opacity=".5"/><g id="iv"><rect x="146" y="50" width="8" height="34" fill="#ccc"/><rect x="134" y="82" width="32" height="6" fill="#ccc"/></g></g>
+<g class="part" data-p="exhaust"><path d="M260 95 H340" stroke="#ff7a3e" stroke-width="18" opacity=".5"/><g id="ev"><rect x="246" y="50" width="8" height="34" fill="#ccc"/><rect x="234" y="82" width="32" height="6" fill="#ccc"/></g></g>
+<g class="part" data-p="plug"><rect x="194" y="56" width="12" height="26" fill="#ddd"/><circle id="spark" cx="200" cy="88" r="10" fill="#fff36b" opacity="0"/></g>
+<g class="part" data-p="rod"><line id="rod" x1="200" y1="200" x2="200" y2="360" stroke="#aab" stroke-width="12" stroke-linecap="round"/></g>
+<g class="part" data-p="piston"><rect id="pis" x="134" y="180" width="132" height="50" rx="4" fill="#c9ced8"/><rect id="ring" x="134" y="186" width="132" height="4" fill="#777"/></g>
+<g class="part" data-p="crank"><circle cx="200" cy="360" r="50" fill="#38425e"/><circle id="pin" cx="200" cy="320" r="10" fill="#ddd"/></g>
+<g class="part" data-p="oil"><path d="M110 410 h180 v30 h-180z" fill="#b8860b" opacity=".55"/><text x="200" y="430" text-anchor="middle" font-size="11" fill="#fff">oil sump</text></g>
+<text id="lbl" x="200" y="452" text-anchor="middle" font-size="16" font-weight="700" fill="#ffb020"></text>
+</svg>
+<div class="ctl"><button id="pp">⏸ Pause</button><button id="slow">🐢 Slow</button><button id="mode">Mode: Gas (spark)</button></div>
+<div class="info" id="info"></div></div>
+<div class="card"><div class="prog" id="prog"></div><div class="step" id="step"></div><div class="nav"><button id="prev">← Back</button><button id="next" class="p">Next →</button></div></div></div>
+<script>
+const PARTS={
+cyl:['Cylinder','The tube the piston slides in. The 3039R\'s Yanmar-built diesel has 3 of them, totaling about 1.6 L.'],
+piston:['Piston','Gets shoved down by burning fuel. The rings seal it against the cylinder wall. Worn rings let oil in, which shows up as blue smoke.'],
+rod:['Connecting rod','Links the piston to the crankshaft. It turns up-and-down motion into spinning.'],
+crank:['Crankshaft','The spinning output. It turns the flywheel, the transmission, and on a tractor the PTO, which spins at 540 rpm.'],
+cam:['Camshaft','Lobes push the valves open at exactly the right moment. It turns once for every two crank turns, because one cycle takes two revolutions.'],
+intake:['Intake valve','Lets air in, or an air–fuel mix in a gas engine. Keep the tractor\'s air filter clean, because dust destroys engines.'],
+exhaust:['Exhaust valve','Lets the burned gases out to the muffler. Newer Tier 4 diesels add a DPF to catch soot.'],
+plug:['Spark plug / injector','Gas engines fire a spark. Diesels have no spark plug. An injector sprays fuel into air that is already hot enough to ignite it. Glow plugs help on cold starts.'],
+cool:['Cooling jacket','Coolant flows around the cylinder to the radiator. Florida heat plus grass clippings clogging the radiator screen is the #1 cause of tractor overheating. Blow it out often.'],
+oil:['Lubrication','An oil pump pushes oil from the sump to the bearings, the cam, and the cylinder walls. Check the dipstick before every use. On a 3039R, change it around every 500 hours.']};
+let th=0,run=true,spd=4,diesel=false;
+const STEPS=[
+{t:'Meet the parts',on:['cyl','piston','rod','crank'],b:'<p>An engine is an air pump that burns fuel. A <b>piston</b> slides in a <b>cylinder</b>, and a <b>connecting rod</b> turns the <b>crankshaft</b>. Tap each part.</p>'},
+{t:'Stroke 1: Intake',on:['intake','piston','cam'],ph:0,b:'<p>The piston moves <b>down</b> and the intake valve opens. That sucks in air (or air plus fuel in a gas engine). It works like pulling back a syringe.</p>'},
+{t:'Stroke 2: Compression',on:['piston','cyl'],ph:1,b:'<p>Both valves close and the piston moves <b>up</b>, squeezing the air into a tiny space. Gas engines squeeze it about 10:1. Diesels squeeze about 20:1, and that heats the air past 500 °C.</p>'},
+{t:'Stroke 3: Power',on:['plug','piston','crank'],ph:2,b:'<p>Bang. The fuel ignites, the hot gas expands, and it slams the piston <b>down</b>. This is the only stroke that makes power. The heavy flywheel carries the engine through the other three.</p>'},
+{t:'Stroke 4: Exhaust',on:['exhaust','piston'],ph:3,b:'<p>The exhaust valve opens and the piston moves <b>up</b>, pushing the burned gas out. Then the cycle repeats. That\'s 4 strokes in 2 crank turns.</p>'},
+{t:'Valves and cam timing',on:['cam','intake','exhaust'],b:'<p>The <b>camshaft</b> is geared or belted to the crank at a 1:2 ratio. If a timing belt snaps, valves can hit pistons. That\'s why belts get changed on schedule.</p>'},
+{t:'Spark vs diesel',on:['plug'],b:'<p><b>Gas:</b> it mixes fuel with air, compresses it, then a spark lights it. <b>Diesel:</b> it compresses only air until it\'s scorching hot, then injects fuel, which lights itself. Diesels make more <b>torque</b> at low rpm and burn less fuel. That\'s why your JD 3039R (39 hp, 3-cyl diesel) can lug a loader all day.</p><p class="tip">Toggle "Mode" to compare.</p>'},
+{t:'Cooling and lubrication',on:['cool','oil'],b:'<p>Only about 30–40% of the fuel\'s energy becomes motion. The rest is heat, carried off by the <b>coolant</b> and radiator. <b>Oil</b> keeps the metal parts from welding together.</p><p><b>Tractor checklist:</b> oil level, coolant level, a clean radiator screen, the air filter, and draining water from the fuel filter. Diesel hates water, and Florida humidity puts it there.</p>'}];
+const QUIZ=[
+['Which stroke makes power?',['Intake','Compression','Power','Exhaust'],2,'Only the power stroke pushes the crank. The flywheel carries the rest.'],
+['How many crank revolutions per 4-stroke cycle?',['1','2','4'],1,'Two. That\'s why the cam turns at half speed.'],
+['How does a diesel ignite its fuel?',['Spark plug','Heat from compression','Glow plug the whole time'],1,'Compressed air gets hot enough to light the injected fuel.'],
+['Your 3039R is overheating while mowing. Check first:',['Spark plugs','Radiator screen for grass','Tire pressure'],1,'Clippings clog the screen. Also, diesels have no spark plugs.'],
+['Blue smoke usually means…',['Burning oil (worn rings or seals)','Too much coolant','Normal operation'],0,'Oil is getting past the rings into the combustion chamber.']];
+const S=['INTAKE','COMPRESSION','POWER','EXHAUST'],$=id=>document.getElementById(id);
+window.onStep=i=>{const p=STEPS[i]&&STEPS[i].ph;if(p!=null){th=p*180+5}};
+function draw(){const r=40,L=140,a=th*Math.PI/180,cx=200,cy=360;
+ const px=cx+r*Math.sin(a),py=cy-r*Math.cos(a),y=py-Math.sqrt(L*L-(px-cx)**2);
+ $('pin').setAttribute('cx',px);$('pin').setAttribute('cy',py);$('rod').setAttribute('x1',200);$('rod').setAttribute('y1',y+25);$('rod').setAttribute('x2',px);$('rod').setAttribute('y2',py);
+ const top=y-40;$('pis').setAttribute('y',top+25);$('ring').setAttribute('y',top+31);
+ const ph=Math.floor((th%720)/180),f=(th%180)/180;$('lbl').textContent=(ph+1)+'. '+S[ph];
+ const lift=s=>s?Math.sin(f*Math.PI)*14:0;$('iv').setAttribute('transform','translate(0,'+lift(ph==0)+')');$('ev').setAttribute('transform','translate(0,'+lift(ph==3)+')');
+ $('cam1').setAttribute('transform','rotate('+(th/2)+' 150 34)');$('cam2').setAttribute('transform','rotate('+(th/2+90)+' 250 34)');
+ const g=$('gas');g.setAttribute('height',Math.max(0,top+25-82));
+ g.setAttribute('fill',ph==0?'#3ec7ff':ph==1?(diesel?'#ff9a3e':'#7fd1ff'):ph==2?'#ff5d2e':'#777');g.setAttribute('opacity',ph==1?.25+f*.4:.4);
+ $('spark').setAttribute('opacity',ph==2&&f<.15?1-f*6:0);$('spark').setAttribute('fill',diesel?'#ff9a3e':'#fff36b');
+ if(run)th=(th+spd)%720;requestAnimationFrame(draw)}
+$('pp').onclick=e=>{run=!run;e.target.textContent=run?'⏸ Pause':'▶ Play'};
+$('slow').onclick=e=>{spd=spd==4?1:4;e.target.textContent=spd==1?'🐇 Fast':'🐢 Slow'};
+$('mode').onclick=e=>{diesel=!diesel;e.target.textContent='Mode: '+(diesel?'Diesel (compression)':'Gas (spark)');$('info').innerHTML=diesel?'<b>Diesel</b>: the "spark" is really injected fuel lighting itself in the superheated air. No spark plug.':'<b>Gas</b>: the spark plug fires at the top of compression.'};
+draw();
+</script><script src="../lesson.js"></script></body></html>
