@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Toyota 5.7L V8 (3UR-FE)</title></head><body>
+<script src="core.js"></script>
+<script>
+/* Toyota 3UR-FE 5.7 L V8 (Tundra, Sequoia, Land Cruiser, LX570). Specs checked against Toyota's 3UR-FE new-car
+   features doc + Wikipedia: 5,663 cc, 90 deg V8, bore x stroke 94.0 x 102.0 mm, 10.2:1, 32-valve DOHC, chain drive,
+   Dual VVT-i, pentroof chambers, cross-flow, SFI (sequential port injection), DIS coil-on-plug, die-cast aluminum
+   block + heads with cast-iron liners, forged crank (5 mains) + rods, 381 hp @ 5600, 401 lb-ft @ 3600, idle ~650.
+   Firing order 1-8-7-3-6-5-4-2. Toyota numbering (TSB "Engine Bank 1 and Bank 2"): Bank 1 holds No.1 and the odd
+   cylinders 1-3-5-7 front to back; Bank 2 holds 2-4-6-8. 1 unit ~ 1 cm. x = across the engine (Bank 1 at +x),
+   y = length (front, with the timing chains, at high y), z = up.
+
+   HOW IT WORKS (cross-plane crank, a power stroke every 90 deg of crank):
+   intake (port injector sprays at the back of the intake valves, air+fuel drawn in) -> compression (10.2:1) ->
+   spark (coil-on-plug fires the plug) -> power -> exhaust (out to the exhaust manifold / catalyst).
+   Crank pins at 90 deg; each pin carries one rod from each bank (pairs 1+2, 3+4, 5+6, 7+8). Chains drive the 4
+   camshafts at half crank speed; VVT-i phasers on the cams shift their timing with oil pressure.
+
+   PARTS
+   CASE     oil pan . aluminum block (two cylinder banks + crankcase) . 2 heads . 2 cam covers . timing cover .
+            intake manifold (in the valley) + throttle body . 2 exhaust manifolds . crank pulley
+   MOTION   8 pistons . 8 rods . crankshaft: 5 main journals, webs, 4 crankpins . 4 camshafts with lobes .
+            32 valves . timing chain + sprockets . 4 VVT-i phasers / cam sprockets . chain tensioner guide
+   FUEL/IGN 8 coil-on-plug units . 8 port injectors . 2 fuel rails */
+const vW = 60, vD = 60, vH = 58, VCX = 30, VCZ = 20, VR = 5.1, VL = 15.4, BOREV = 4.7;
+const BANKS = [{ id:1, beta: 45 }, { id:2, beta: -45 }];
+const FIRE = [1, 8, 7, 3, 6, 5, 4, 2];
+const phaseOf = n => FIRE.indexOf(n) * 90;                               // crank deg after cyl 1 fires
+const YOF = { 1:46, 3:35.5, 5:25, 7:14.5, 2:43.8, 4:33.3, 6:22.8, 8:12.3 }; // bank 2 sits back by half a rod width
+const CYLV = [1,2,3,4,5,6,7,8].map(n => ({ n, bank: n % 2 ? 0 : 1, y: YOF[n], ph: phaseOf(n) }));
+const vmod = (a, n) => ((a % n) + n) % n;
+const vLift = (a, a0, len) => { const d = vmod(a - a0, 720); return d < len ? Math.sin(Math.PI*d/len) ** 2 : 0; };
+const IVO = 350, ILEN = 240, EVO = 140, ELEN = 230;
+const ALUM = { l:'#e3e5e2', m:'#c3c7c3', d:'#8f9591' }, BLKM = { l:'#5a5d61', m:'#404347', d:'#26282b' };
+const STL = METAL, DST = { l:'#9aa3a7', m:'#78828a', d:'#525b62' }, RUBR = DARK;
+// bank frame: axis up the bore, lateral toward the valley
+const axis = b => { const t = BANKS[b].beta*Math.PI/180; return [Math.sin(t), 0, Math.cos(t)]; };
+const vall = b => { const A = axis(b); return [-Math.sign(A[0])*A[2], 0, Math.abs(A[0])]; };
+const LP = (b, s, lat, y) => { const A = axis(b), V = vall(b); return [VCX + s*A[0] + lat*V[0], y, VCZ + s*A[2] + lat*V[2]]; };
+// an oriented box: s0..s1 along the bore, l0..l1 toward the valley, y0..y1 along the engine
+function oBox(b, s0, s1, l0, l1, y0, y1, m, w = 1, sh = tone){
+  const c = (i, j, k) => LP(b, i ? s1 : s0, j ? l1 : l0, k ? y1 : y0), A = axis(b), V = vall(b), neg = v => v.map(x => -x);
+  const F = [[A, [[1,0,0],[1,1,0],[1,1,1],[1,0,1]]], [neg(A), [[0,0,0],[0,1,0],[0,1,1],[0,0,1]]], [V, [[0,1,0],[1,1,0],[1,1,1],[0,1,1]]],
+    [neg(V), [[0,0,0],[1,0,0],[1,0,1],[0,0,1]]], [[0,1,0], [[0,0,1],[1,0,1],[1,1,1],[0,1,1]]], [[0,-1,0], [[0,0,0],[1,0,0],[1,1,0],[0,1,0]]]];
+  const pts = []; for (const i of [0,1]) for (const j of [0,1]) for (const k of [0,1]) pts.push(c(i, j, k));
+  const svg = F.filter(([n]) => vis(n)).map(([n, q]) => shape(q.map(([i,j,k]) => c(i,j,k)), sh(n, m), w)).join('');
+  return { box:[[0,1,2].map(i => Math.min(...pts.map(p => p[i]))), [0,1,2].map(i => Math.max(...pts.map(p => p[i])))], svg, at: avg(pts) };
+}
+const vBx = (x0,y0,z0,x1,y1,z1,m,w=.9,sh=toneI) => ({ box:[[x0,y0,z0],[x1,y1,z1]], svg: box(x0,y0,z0,x1,y1,z1,m,sh,w) });
+const vRod = (a, b, r, m, w=.8) => { const d = norm(sub(b, a)), pad = i => r*Math.sqrt(Math.max(0, 1 - d[i]*d[i]));
+  return { box:[[0,1,2].map(i => Math.min(a[i],b[i]) - pad(i)), [0,1,2].map(i => Math.max(a[i],b[i]) + pad(i))], svg: rod(a, b, r, m, toneI, w) }; };
+const chainLoop = (yb, cs) => { const pts = []; for (const [x, z, r] of cs) for (let i = 0; i < 24; i++){ const a = i/24*2*Math.PI; pts.push([x + r*Math.cos(a), z + r*Math.sin(a)]); }
+  return hull(pts.map(([x, z]) => [x, -z])).map(([x, z]) => [x, yb, -z]); };
+
+function vState(st){
+  return CYLV.map(c => { const be = BANKS[c.bank].beta, rel = (st.ang - c.ph) , pin = be - c.ph;   // pin angle on the crank
+    const th = (st.ang + pin) * Math.PI/180, px = VCX + VR*Math.sin(th), pz = VCZ + VR*Math.cos(th);
+    const g = (st.ang + pin - be) * Math.PI/180, s = VR*Math.cos(g) + Math.sqrt(VL*VL - (VR*Math.sin(g))**2);
+    const a = vmod(rel, 720); return { ...c, px, pz, s, a, li: vLift(a, IVO, ILEN), le: vLift(a, EVO, ELEN) }; });
+}
+
+/* ---------- closed engine ---------- */
+function vBody(st, m){
+  const B = [], put = p => B.push(p), pm = { l:m.l, m:m.m, d:m.d };
+  put(vBx(17, 6, 0, 43, 50, 9, ALUM, 1.4, tone));                                 // oil pan
+  put(vBx(15, 4, 9, 45, 52, 22, ALUM, 1.6, tone));                                // crankcase / skirt
+  for (const b of [0, 1]){
+    put(oBox(b, 6, 25, -7.5, 7.5, 4, 52, ALUM, 1.6));                             // cylinder bank
+    put(oBox(b, 25, 32, -7.5, 7.5, 4, 52, ALUM, 1.4));                            // head
+    put(oBox(b, 32, 36, -6.5, 6.5, 5, 51, BLKM, 1.4));                            // cam cover
+    for (const c of CYLV.filter(c => c.bank === b)) put(oBox(b, 36, 38.5, -1.6, 1.6, c.y - 1.8, c.y + 1.8, pm, .8));   // coil-on-plug heads
+    put(vRod(LP(b, 26, -9.5, 8), LP(b, 26, -9.5, 50), 2.2, matOf('#b8b2a8'), 1.2));                                   // exhaust manifold
+  }
+  put(vBx(19, 6, 42, 41, 50, 50, matOf('#3b3e42'), 1.5, tone));                   // intake manifold (valley)
+  for (const y of [14, 25, 36]) put(vBx(20, y, 50, 40, y + 2, 50.6, matOf('#3b3e42'), .6, tone));
+  put(vRod([30, 50, 46], [30, 56, 46], 4, ALUM, 1.2));                            // throttle body
+  // timing cover across the front, crank pulley
+  put(vBx(16, 52, 8, 44, 55, 22, ALUM, 1.3, tone));
+  for (const b of [0, 1]) put(oBox(b, 6, 36, -7.5, 7.5, 52, 55, ALUM, 1.2));
+  put(vRod([VCX, 55, VCZ], [VCX, 58, VCZ], 6.5, STL, 1.2));
+  if (facing([0,0,1])) put({ box:[[44,20,40],[50,40,41]], svg: '' });
+  return B;
+}
+
+/* ---------- see-through ---------- */
+let V8_LABELS = '';
+function vMech(st, k){
+  const M = [], put = p => M.push(p), cs = vState(st), run = st.mode === 'run', crank = st.mode !== 'off' || st.rpm > 5;
+  const spark = c => run && (c.a >= 700 || c.a < 6), inj = c => run && c.a >= 300 && c.a < 430;
+  // crankshaft: main journals between pins, webs, pins
+  const pins = [[1,2],[3,4],[5,6],[7,8]].map(([o, e]) => { const c = cs.find(q => q.n === o), d = cs.find(q => q.n === e); return { y0: d.y - 1.4, y1: c.y + 1.4, x: c.px, z: c.pz }; });
+  const ys = [6]; for (const p of pins.slice().sort((a, b) => a.y0 - b.y0)) ys.push(p.y0 - 1.2, p.y1 + 1.2); ys.push(56);
+  for (let i = 0; i < ys.length; i += 2) put(vRod([VCX, ys[i], VCZ], [VCX, ys[i + 1], VCZ], 2.4, STL, .8));
+  for (const p of pins){ for (const yw of [p.y0 - 1.2, p.y1 + .2]){ const dx = p.x - VCX, dz = p.z - VCZ;
+      put(vRod([VCX - dx*.7, yw + .5, VCZ - dz*.7], [p.x, yw + .5, p.z], 3, DST, .8)); }
+    put(vRod([p.x, p.y0, p.z], [p.x, p.y1, p.z], 1.9, STL, .8)); }
+  for (const c of cs){ const b = c.bank, wr = LP(b, c.s, 0, c.y);
+    put(vRod([c.px, c.y - 1, c.pz], [c.px, c.y + 1, c.pz], 2.7, matOf('#b9c0c4'), .7));
+    put(vRod([c.px, c.y, c.pz], wr, 1, matOf('#b9c0c4'), .7));
+    const hot = run && c.a < 60;
+    put({ ...vRod(LP(b, c.s - 3, 0, c.y), LP(b, c.s + 3, 0, c.y), BOREV, hot ? matOf('#f4a15a') : ALUM, 1), at: LP(b, c.s, 0, c.y) });
+    // four valves: two intake (valley side), two exhaust (outside); pushed open by their cam lobes
+    for (const [lat, l, col] of [[2.3, c.li, '#8fb7e8'], [-2.3, c.le, '#c9a27a']]) for (const dy of [-1.9, 1.9]){ const o = l*1.1;
+      put(vRod(LP(b, 25.4 - o, lat, c.y + dy), LP(b, 31.6 - o, lat, c.y + dy), .3, STL, .4));
+      put(vRod(LP(b, 25.2 - o, lat, c.y + dy), LP(b, 25.7 - o, lat, c.y + dy), 1.3, matOf(l > .05 ? col : '#c6ccce'), .5)); }
+    // coil-on-plug down the centre of the head to the plug; spark glow when it fires
+    put(vRod(LP(b, 27, 0, c.y), LP(b, 37, 0, c.y), .8, spark(c) ? matOf('#8af0ff') : matOf('#3b3e42'), .7));
+    if (spark(c)){ const q = P(...LP(b, 25.6, 0, c.y)); put({ box:[[0,0,0],[0,0,0]].map((_, i) => LP(b, 25.6 + i, 0, c.y)), svg:`<circle cx="${f(q[0])}" cy="${f(q[1])}" r="2.4" fill="#8af0ff" opacity=".9"/>` }); }
+    // port injector in the intake runner, aimed at the intake valves
+    put(vRod(LP(b, 33, 9.5, c.y), LP(b, 29, 5.5, c.y), .55, inj(c) ? matOf('#f4b829') : STL, .6));
+    if (inj(c)) put({ box: [LP(b, 27.5, 4, c.y - 1), LP(b, 29, 5.5, c.y + 1)].reduce((a, p) => [[0,1,2].map(i => Math.min(a[0][i], p[i])), [0,1,2].map(i => Math.max(a[1][i], p[i]))], [[1e9,1e9,1e9],[-1e9,-1e9,-1e9]]),
+      svg: fill(pd([LP(b, 29, 5.5, c.y), LP(b, 27.2, 3.2, c.y - 1.2), LP(b, 27.2, 3.2, c.y + 1.2)]), '#f6d36b', 'opacity=".9"') });
+  }
+  // camshafts (2 per bank) with lobes, fuel rails
+  for (const b of [0, 1]){
+    for (const [lat, a0, len, nm] of [[2.3, IVO, ILEN], [-2.3, EVO, ELEN]]){
+      put(vRod(LP(b, 33.2, lat, 5), LP(b, 33.2, lat, 53.5), .8, STL, .6));
+      for (const c of cs.filter(c => c.bank === b)) for (const dy of [-1.9, 1.9]){
+        const ca = (vmod(c.a - (a0 + len/2), 720))/2*Math.PI/180, A = axis(b), V = vall(b);
+        const ring = yy => Array.from({length:16}, (_, i) => { const t = i/16*2*Math.PI, rel = vmod(t - ca + Math.PI, 2*Math.PI) - Math.PI, bump = Math.abs(rel) < 1 ? Math.cos(rel*Math.PI/2)**2 : 0, r = 1.1 + 1.1*bump;
+          const o = LP(b, 33.2, lat, yy); return [o[0] - (A[0]*Math.cos(t) + V[0]*Math.sin(t))*r, yy, o[2] - (A[2]*Math.cos(t) + V[2]*Math.sin(t))*r]; });
+        const R0 = ring(c.y + dy - .5), R1 = ring(c.y + dy + .5);
+        put({ box:[[0,1,2].map(i => Math.min(...R0.concat(R1).map(p => p[i]))), [0,1,2].map(i => Math.max(...R0.concat(R1).map(p => p[i])))], svg: loft(R0, R1, n => toneI(n, DST)) + hullInk([...R0, ...R1], .6) }); } }
+    put(vRod(LP(b, 33.5, 10, 8), LP(b, 33.5, 10, 50), .9, matOf('#9aa3a7'), .6));
+  }
+  // timing chain at the front: crank sprocket -> the four cam sprockets / VVT-i phasers
+  const cam = (b, lat) => LP(b, 33.2, lat, 53.8);
+  const spr = [[VCX, VCZ, 2.6], ...[0, 1].flatMap(b => [2.3, -2.3].map(l => { const p = cam(b, l); return [p[0], p[2], 2.4]; }))];
+  for (const [x, z, r] of spr.slice(1)) put(vRod([x, 53.2, z], [x, 54.6, z], r, matOf('#d7b24a'), .7));
+  put(vRod([VCX, 53.2, VCZ], [VCX, 54.6, VCZ], 2.6, matOf('#d7b24a'), .7));
+  { const loop = chainLoop(54, spr.map(([x, z, r]) => [x, z, r + .4])), d = pd(loop);
+    put({ box:[[10,53.6,16],[50,54.4,56]], svg:`<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.2" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="#9aa3a7" stroke-width="1.2" stroke-dasharray="1 .8" stroke-dashoffset="${f(-st.ang*.15)}"/>` }); }
+  put({ box:[[17,6,1],[43,50,1.3]], svg: fill(pd(on(PZ(3), rectUV(17.4, 6.4, 42.6, 49.6))), '#b4892e', 'opacity=".55"') });
+  const sb = byDepth(M), c1 = cs.find(c => c.n === 1);
+  V8_LABELS = k <= .6 ? '' : xrCallouts([
+    { at: LP(0, c1.s, BOREV, c1.y), text:'PISTON', on: run },
+    { at: [(c1.px + LP(0, c1.s, 0, c1.y)[0])/2, c1.y, (c1.pz + LP(0, c1.s, 0, c1.y)[2])/2], text:'CONNECTING ROD', on: run },
+    { at: [VCX, 6, VCZ], text:'CRANKSHAFT', on: crank },
+    { at: LP(0, 34, 2.3, 30), text:'INTAKE CAM', on: run },
+    { at: LP(1, 34, -2.3, 30), text:'EXHAUST CAM', on: run },
+    { at: LP(0, 27, 2.3, c1.y + 1.9), text:'INTAKE VALVES', on: run && c1.li > .05 },
+    { at: LP(0, 27, -2.3, c1.y + 1.9), text:'EXHAUST VALVES', on: run && c1.le > .05 },
+    { at: LP(1, 36.5, 0, 43.8), text:'COIL-ON-PLUG', on: cs.some(spark) },
+    { at: LP(0, 31, 7.5, 35.5), text:'PORT INJECTOR', on: cs.some(inj) },
+    { at: LP(1, 33.5, 10, 20), text:'FUEL RAIL', on: run },
+    { at: [VCX, 54.4, 36], text:'TIMING CHAIN', on: crank },
+    { at: [cam(0, 2.3)[0], 54.6, cam(0, 2.3)[2]], text:'VVT-I PHASER', on: run && st.thr !== 'Idle' },
+    { at: [40, 40, 2], text:'OIL PAN', on: false },
+  ], [0, vW, 0, vD, 0, vH]);
+  return sb;
+}
+
+function scene(st, m){
+  let s = castShadow([[12,4,0],[48,4,0],[48,56,0],[12,56,0],[8,4,40],[52,4,40],[8,56,40],[52,56,40]]);
+  const k = ease(st.xr || 0), body = byDepth(vBody(st, m));
+  if (k > 0) return s + `<g opacity="${f(1 - .82*k)}">${body}</g><g opacity="${f(k)}">${vMech(st, k)}</g>` + V8_LABELS;
+  const run = st.mode === 'run';
+  return s + body + xrCallouts([
+    { at:[30, 30, 50.6], text:'INTAKE MANIFOLD', on: run },
+    { at:[30, 56, 50], text:'THROTTLE BODY', on: run && st.thr !== 'Idle' },
+    { at: LP(0, 38.5, 0, 35.5), text:'COIL PACKS', on: run },
+    { at: LP(0, 36, -6.5, 20), text:'BANK 1 (1-3-5-7)', on: false },
+    { at: LP(1, 36, -6.5, 20), text:'BANK 2 (2-4-6-8)', on: false },
+    { at: LP(0, 26, -11.7, 30), text:'EXHAUST MANIFOLD', on: run },
+    { at:[44, 54, 14], text:'TIMING COVER', on: false },
+    { at:[30, 58, 13.5], text:'CRANK PULLEY', on: st.rpm > 5 },
+    { at:[43, 30, 4], text:'OIL PAN', on: false },
+  ], [0, vW, 0, vD, 0, vH]);
+}
+
+/* ---------- behaviour ---------- */
+const VRPM = { Idle: 650, Cruise: 2000, Full: 5600 };
+let ui, vLoopOn = false;
+function vLoop(){ if (vLoopOn) return; vLoopOn = true;
+  ui.animate(dt => { const st = ui.st; st.t += dt;
+    if (st.mode === 'crank' && st.t > 1.2){ st.mode = 'run'; st.t = 0; ui.flash('Running: coils fire 1-8-7-3-6-5-4-2, one every 90 deg of crank', 2400); }
+    const target = st.mode === 'run' ? VRPM[st.thr] : st.mode === 'crank' ? 200 : 0;
+    st.rpm += (target - st.rpm) * Math.min(1, dt*2); if (st.mode === 'off' && st.rpm < 10) st.rpm = 0;
+    st.ang = vmod(st.ang + (st.rpm > 0 ? 40 + st.rpm*.035 : 0)*dt, 720);       // shown slowed right down
+    const busy = st.mode !== 'off' || st.rpm > 0; if (!busy) vLoopOn = false; return busy; }); }
+const firingNow = st => { const d = vmod(st.ang, 720), i = Math.floor(vmod(d + 10, 720)/90) % 8; return FIRE[i]; };
+ui = mountFigure({
+  fig:'V8', turn:'full', title:'Toyota 5.7L V8 (3UR-FE)', palette:'tomato',
+  size:[vW, vD, vH], center:[vW/2, vD/2],
+  state:{ mode:'off', t:0, rpm:0, ang:20, thr:'Idle' },
+  scene,
+  stats: st => [{ label:'RPM', value: String(Math.round(st.rpm/10)*10) }, { label:'FIRING', value: st.mode === 'run' ? 'CYL ' + firingNow(st) : '--', small:true }],
+  buttons:[
+    { label:'Start / Stop', onClick: st => { if (st.mode === 'off'){ st.mode = 'crank'; st.t = 0; ui.flash('Starter cranking; the ECU waits for cam + crank signals', 1400); } else { st.mode = 'off'; ui.flash('Ignition off: injectors and coils stop'); } vLoop(); } },
+    { label:'Throttle', choices: st => Object.keys(VRPM).map(n => ({ label:n, current: st.thr === n, onClick: st => { st.thr = n; if (st.mode === 'off') ui.flash('Start the engine first'); } })) },
+  ],
+  params:(st, q) => { if (q.has('ang')) st.ang = +q.get('ang'); if (q.get('run') === '1'){ st.mode = 'run'; st.rpm = 650; } if (q.has('thr')) st.thr = q.get('thr'); },
+});
+if (ui.st.mode === 'run' && new URLSearchParams(location.search).get('hold') !== '1') vLoop();
+xrMount(() => ui, () => '');
+</script></body></html>
