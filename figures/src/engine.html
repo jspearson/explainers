@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3-cylinder diesel engine</title></head><body>
+<script src="core.js"></script>
+<script>
+/* 3-cylinder compact-tractor diesel (the kind of engine in a JD 3039R: a small inline-three, ~1.6 L, overhead valves
+   with pushrods, glow plugs, mechanical injection pump). 1 unit ~ 1 cm. x = depth (exhaust side faces x = 42),
+   y = length (flywheel at y = 0, fan + radiator at the far end), z = up.
+
+   HOW IT WORKS (one cylinder, 4 strokes = 2 crank turns; the camshaft turns once):
+   1 INTAKE   piston goes down, intake valve open: clean air only (diesel) / air+fuel (gas) is pulled in.
+   2 COMPRESS both valves shut, piston goes up: diesel squeezes air ~19-22:1 until it is hot enough to light fuel;
+              a gas engine squeezes ~9-10:1 (any more and it would knock).
+   3 POWER    diesel: injector sprays fuel into the hot air and it lights by itself. gas: spark plug fires. Burning gas
+              pushes the piston down; the rod turns the crank.
+   4 EXHAUST  piston goes up, exhaust valve open: burnt gas pushed out to the manifold.
+   Inline-3: crank throws 120 deg apart, firing order 1-3-2, a power stroke every 240 deg of crank.
+   Cold start (diesel): glow plugs pre-heat each chamber, the starter spins the flywheel ring gear, then it runs.
+
+   PARTS (each held by another)
+   CASE       oil pan (bolted under block) . block . head (on block) . valve cover (on head) . timing cover (front of block)
+              . flywheel housing (rear of block)
+   MOTION     3 pistons in bores . 3 wrist pins . 3 connecting rods . crankshaft: main journals, 6 webs, 3 crankpins,
+              counterweights . flywheel on the crank's rear flange . crank gear . cam gear (2x teeth, half speed) .
+              camshaft in the block with 6 lobes . 6 pushrods standing on lobes . 6 rocker arms on a rocker shaft on the head
+              . 3 intake + 3 exhaust valves in the head
+   FUEL/FIRE  injection pump on the block side (driven off the timing gears) . 3 steel fuel lines . 3 injectors in the
+              head . 3 glow plugs  (gas mode: 3 spark plugs + ignition coil instead)
+   AIR        intake manifold + air inlet . exhaust manifold + outlet pipe
+   COOL       water pump on the timing cover . fan on the pump shaft . V-belt crank pulley -> pump -> alternator .
+              radiator with upper / lower hose
+   OIL/ELEC   oil filter on block . dipstick . starter on flywheel housing . alternator on bracket */
+const eW = 42, eD = 73, eH = 66;
+const CX = 19, CZ = 20, THR = 6, ROD = 16, BORE = 6.3, CYLS = [18, 34, 50], PHASE = [0, 480, 240];
+const CAMX = 26, CAMZ = 29;
+const BLK = { l:'#7fa38e', m:'#5f8670', d:'#3c5848' };            // JD-ish green-grey paint is the palette; parts below
+const STEEL = METAL, DSTEEL = { l:'#9aa3a7', m:'#78828a', d:'#525b62' }, RUBBER = DARK, BRASS = matOf('#e0b350');
+const ALU = { l:'#e6e8e6', m:'#c8ccca', d:'#9aa09d' }, RADM = matOf('#4a4f52'), COP = matOf('#d08a52');
+const mod = (a, n) => ((a % n) + n) % n;
+const STROKES = ['POWER', 'EXHAUST', 'INTAKE', 'COMPRESSION'];
+const strokeOf = a => STROKES[Math.floor(mod(a, 720) / 180)];
+const lift = (a, a0, len) => { const d = mod(a - a0, 720); return d < len ? Math.sin(Math.PI*d/len) ** 2 : 0; };
+const IN0 = 350, EX0 = 150, VLEN = 230, VL = 1.5;
+
+// part helpers: every part has a box so byDepth can sort it from any side
+const eBx = (x0,y0,z0,x1,y1,z1,m,w=.9,sh=toneI) => ({ box:[[x0,y0,z0],[x1,y1,z1]], svg: box(x0,y0,z0,x1,y1,z1,m,sh,w) });
+const eRod = (a, b, r, m, w=.8, r1=r) => { const R = Math.max(r, r1), d = norm(sub(b, a)), pad = i => R*Math.sqrt(Math.max(0, 1 - d[i]*d[i])); return { box:[[0,1,2].map(i => Math.min(a[i],b[i]) - pad(i)), [0,1,2].map(i => Math.max(a[i],b[i]) + pad(i))], svg: rod(a, b, r, m, toneI, w, r1) }; };
+const eLine = (pts, col, w=.5) => { const d = pd(pts, false);
+  return { box:[[0,1,2].map(i => Math.min(...pts.map(p => p[i])) - .5), [0,1,2].map(i => Math.max(...pts.map(p => p[i])) + .5)],
+    svg:`<path d="${d}" fill="none" stroke="${INK}" stroke-width="${f(2*w+1)}" stroke-linejoin="round" stroke-linecap="round"/><path d="${d}" fill="none" stroke="${col}" stroke-width="${f(2*w)}" stroke-linejoin="round" stroke-linecap="round"/>` }; };
+// a disc in the plane y = const (pulley, flywheel, gear), centre (x, z), thickness y0..y1
+const eDisc = (x, z, y0, y1, r, m, w=1) => eRod([x, y0, z], [x, y1, z], r, m, w);
+// convex loop in the plane y = yb around circles [(x, z, r)] (the V-belt)
+const beltPts = (yb, cs) => { const pts = []; for (const [x, z, r] of cs) for (let i = 0; i < 24; i++){ const a = i/24*2*Math.PI; pts.push([x + r*Math.cos(a), z + r*Math.sin(a)]); }
+  const h = hull(pts.map(([x, z]) => [x, -z])); return h.map(([x, z]) => [x, yb, -z]); };
+
+function engState(st){
+  return CYLS.map((c, i) => { const a = st.ang - PHASE[i], t = a*Math.PI/180;
+    const px = CX + THR*Math.sin(t), pz = CZ + THR*Math.cos(t), wz = CZ + THR*Math.cos(t) + Math.sqrt(ROD*ROD - (THR*Math.sin(t))**2);
+    return { c, a: mod(a, 720), px, pz, wz, crown: wz + 3.5, li: lift(a, IN0, VLEN), le: lift(a, EX0, VLEN) }; });
+}
+
+/* ---------- the closed engine ---------- */
+function engBody(st, m){
+  const P2 = [], put = p => P2.push(p), run = st.mode === 'run' || st.mode === 'crank';
+  const pnt = { l:m.l, m:m.m, d:m.d };
+  // flywheel housing (bell) at the rear, block, oil pan, head, valve cover
+  put(eBx(4, 0, 4, 34, 10, 40, DSTEEL, 1.6, tone));
+  put(eBx(6, 10, 12, 32, 58, 46, pnt, 1.8, tone));
+  put(eBx(8, 12, 2, 30, 56, 12, DSTEEL, 1.4, tone));
+  put(eBx(6, 10, 46, 32, 58, 55, pnt, 1.6, tone));
+  put(eBx(13, 12, 55, 30, 56, 61, pnt, 1.4, tone));
+  // valve cover ribs + oil filler cap on top
+  for (const y of [20, 28, 36, 44]) put(eBx(15, y - .4, 61, 28, y + .4, 61.5, pnt, .5, tone));
+  put({ box:[[19,49,61],[25,55,63]], svg: cyl(22, 52, 61, 63, 2.6, matOf('#e2c23a'), toneI, 1) });
+  // timing cover (front), crank pulley, water pump + its pulley, alternator, V-belt, fan
+  put(eBx(4, 58, 8, 32, 61, 47, pnt, 1.4, tone));
+  put(eDisc(CX, CZ, 61, 63.5, 5, STEEL, 1.2));
+  put(eDisc(CX, 44, 61, 63.5, 4, STEEL, 1.1));
+  put(eRod([37, 50, 40], [37, 60, 40], 4.5, ALU, 1.3));
+  put(eDisc(37, 40, 60, 62.5, 3, STEEL, 1));
+  { const bp = beltPts(62.3, [[CX, CZ, 5.2], [CX, 44, 4.2], [37, 40, 3.2]]), d = pd(bp);
+    put({ box:[[13,61.8,14],[41,62.8,49]], svg:`<path d="${d}" fill="none" stroke="${INK}" stroke-width="2.6" stroke-linejoin="round"/><path d="${d}" fill="none" stroke="#2c2926" stroke-width="1.4"/>` }); }
+  put(engFan(st));
+  // radiator: core + top/bottom tanks + cap, fins drawn on the face toward the viewer
+  { let r = box(2, 69, 9, 36, 72, 61, RADM, toneI, 1.6) + box(2, 68.5, 61, 36, 72.5, 65, DSTEEL, toneI, 1.2) + box(2, 68.5, 5, 36, 72.5, 9, DSTEEL, toneI, 1.2);
+    const fy = facing([0,1,0]) ? 72.1 : facing([0,-1,0]) ? 68.9 : null;
+    if (fy != null){ let h = ''; for (let x = 5; x < 36; x += 2.2) h += pd([[x, fy, 10], [x, fy, 60]], false);
+      r += `<path d="${h}" fill="none" stroke="${INK}" stroke-width=".6" opacity=".55"/>`; }
+    r += cyl(30, 70.5, 65, 66.5, 1.6, STEEL, toneI, .9);
+    put({ box:[[2,68.5,5],[36,72.5,66.5]], svg: r }); }
+  // hoses: upper (thermostat housing -> radiator top), lower (radiator bottom -> water pump inlet)
+  put(eRod([CX, 56, 55], [CX, 68.5, 62], 1.6, RUBBER, 1));
+  put(eRod([26, 61, 30], [26, 68.5, 8], 1.6, RUBBER, 1));
+  // exhaust side (x = 32): manifold, outlet pipe, starter, oil filter, glow plug bus, dipstick
+  put(eBx(32, 12, 48, 35, 56, 54, matOf('#8b6b55'), 1.2));
+  put(eRod([35, 34, 51], [38, 34, 51], 2, matOf('#8b6b55'), 1));
+  put(eRod([38, 34, 51], [38, 34, 66], 2.2, matOf('#6f6a64'), 1.2));
+  put(act('starter', eRod([38, 2, 14], [38, 16, 14], 3.6, matOf(st.mode === 'crank' ? '#e2483d' : '#2f3236'), 1.3)));
+  put(eRod([32, 30, 22], [40, 30, 22], 4, matOf('#e8e2d0'), 1.3));
+  put(eRod([32, 44, 14], [33.5, 44, 50], .5, matOf('#e2c23a'), .5));
+  // intake side (x = 6): intake manifold with air inlet, injection pump, fuel lines (or coil + plug wires in gas mode)
+  put(eBx(2.5, 12, 48, 6, 56, 54, ALU, 1.2));
+  put(eRod([4, 34, 54], [4, 34, 64], 2.6, RUBBER, 1.2));
+  if (st.fuel === 'diesel'){
+    put(eBx(0.5, 14, 26, 6, 40, 38, DSTEEL, 1.2));
+    for (const c of CYLS) put(eLine([[3, c - 6, 38], [3, c - 6, 47], [3, c, 57], [10, c, 60]], '#c6ccce', .35));
+  } else {
+    put(eBx(0.5, 22, 56, 5, 30, 60, matOf('#2f3236'), 1));
+    for (const c of CYLS) put(eLine([[3, 26, 58], [7, c, 60], [10, c, 60]], '#3a3a3a', .45));
+  }
+  // injectors (or spark plugs) stand in the head beside the valve cover
+  for (const c of CYLS) put(st.fuel === 'diesel' ? eRod([10, c, 60], [12.2, c, 55], 1, STEEL, .8) : eRod([10, c, 60], [12.2, c, 55], 1, CERAMIC, .8));
+  return P2;
+}
+function engFan(st){
+  const fa = st.ang * 1.15 * Math.PI/180, y0 = 65, y1 = 66; let s = '';
+  const blades = [];
+  for (let i = 0; i < 6; i++){ const a = fa + i*Math.PI/3, b = .38;
+    const q = (r, d) => [CX + r*Math.cos(a + d), y0 + .5 + (d > 0 ? .5 : -.5), 44 + r*Math.sin(a + d)];
+    blades.push(shape([q(3, -b), q(14, -b*.35), q(14, b*.55), q(3, b)], '#2f3236', .8)); }
+  s = blades.join('') + rod([CX, 63.5, 44], [CX, y1, 44], 2, STEEL, toneI, .8);
+  return { box:[[CX - 14, y0, 30], [CX + 14, y1, 58]], svg: s };
+}
+
+/* ---------- see-through: the moving parts ---------- */
+let ENG_LABELS = '';
+function engMech(st, k){
+  const P2 = [], put = p => P2.push(p), cs = engState(st), dsl = st.fuel === 'diesel';
+  const run = st.mode === 'run', fireOn = c => run && (dsl ? (c.a >= 715 || c.a < 25) : (c.a >= 710 || c.a < 8));
+  // crankshaft: main journals between the webs (in pieces so they sort), webs, crankpins, counterweights
+  const ys = [4]; for (const c of CYLS) ys.push(c - 4.8, c + 4.8); ys.push(63);
+  for (let i = 0; i < ys.length; i += 2) put(eRod([CX, ys[i], CZ], [CX, ys[i + 1], CZ], 2.2, STEEL, .8));
+  for (const c of cs){ const dx = c.px - CX, dz = c.pz - CZ;
+    for (const yw of [c.c - 4.8, c.c + 3.2]){
+      put(eRod([CX - dx*.55, yw, CZ - dz*.55], [c.px, yw, c.pz], 3, DSTEEL, .8));
+      put(eRod([CX - dx*.55, yw + 1.6, CZ - dz*.55], [c.px, yw + 1.6, c.pz], 3, DSTEEL, .8)); }
+    put(eRod([c.px, c.c - 3.2, c.pz], [c.px, c.c + 3.2, c.pz], 2, STEEL, .8));
+    // connecting rod: big end round the crankpin, beam up to the wrist pin, piston on the pin
+    put(eRod([c.px, c.c - 1.4, c.pz], [c.px, c.c + 1.4, c.pz], 3, matOf('#b9c0c4'), .8));
+    put(eRod([c.px, c.c, c.pz], [CX, c.c, c.wz], 1.2, matOf('#b9c0c4'), .8));
+    put({ box:[[CX - BORE, c.c - BORE, c.crown - 7], [CX + BORE, c.c + BORE, c.crown]], svg: cyl(CX, c.c, c.crown - 7, c.crown, BORE, ALU, toneI, 1.1)
+      + ink(pd(on(PZ(c.crown - 2), ellUV(CX, c.c, BORE, BORE, 24))), .5) + ink(pd(on(PZ(c.crown - 3.2), ellUV(CX, c.c, BORE, BORE, 24))), .5)
+      + (c.a < 70 && run ? fill(pd(on(PZ(c.crown + .1), ellUV(CX, c.c, BORE*.9, BORE*.9, 20))), '#ff7a2a', `opacity="${f(.85*(1 - c.a/70))}"`) : '') });
+    // bore: a ring at the deck so the cylinder is readable
+    put({ box:[[CX - BORE - .4, c.c - BORE - .4, 45.8], [CX + BORE + .4, c.c + BORE + .4, 46]], svg: ink(pd(on(PZ(46), ellUV(CX, c.c, BORE + .3, BORE + .3, 24))), .9) });
+    // valves (stem + head disc), rockers on the shaft, pushrods on the cam lobes
+    for (const [dy, l, col] of [[-3.5, c.li, '#8fb7e8'], [3.5, c.le, '#c9a27a']]){ const y = c.c + dy, o = l*VL;
+      put(eRod([CX, y, 46.3 - o], [CX, y, 57 - o], .45, STEEL, .5));
+      put(eRod([CX, y, 46.1 - o], [CX, y, 46.7 - o], 2.3, matOf(l > .05 ? col : '#c6ccce'), .6));
+      put(eRod([CX, y, 57.2 - o], [CAMX, y, 57.7 + o], .8, DSTEEL, .6));
+      put(eRod([CAMX, y, 31.6 + o], [CAMX, y, 57.3 + o], .4, STEEL, .5));
+      const cang = (mod(c.a - ((dy < 0 ? IN0 : EX0) + VLEN/2), 720)) / 2 * Math.PI/180, ring = yy => Array.from({length:20}, (_, i) => { const b = i/20*2*Math.PI, rel = mod(b - cang + Math.PI, 2*Math.PI) - Math.PI, bump = Math.abs(rel) < 1 ? Math.cos(rel*Math.PI/2)**2 : 0, r = 1.6 + VL*bump*.8; return [CAMX + r*Math.sin(b), yy, CAMZ + r*Math.cos(b)]; });
+      put({ box:[[CAMX - 3, y - .8, CAMZ - 3], [CAMX + 3, y + .8, CAMZ + 3]], svg: loft(ring(y - .8), ring(y + .8), n => toneI(n, DSTEEL)) + hullInk([...ring(y - .8), ...ring(y + .8)], .7) }); }
+    // injector (or spark plug) into the chamber; glow plug from the exhaust side
+    if (dsl){ put(eRod([10, c.c, 60], [14.6, c.c, 46.6], .75, fireOn(c) ? matOf('#f4b829') : STEEL, .7));
+      if (fireOn(c)) put({ box:[[14,c.c - 2,44],[19,c.c + 2,46.6]], svg: fill(pd([[14.6, c.c, 46.5], [19, c.c - 1.8, 45.6], [19, c.c + 1.8, 45.6]]), '#f6d36b', 'opacity=".9"') });
+      const g = st.glow > 0;
+      put(eRod([33, c.c + 5, 47.6], [23.5, c.c + 2.5, 46.6], .5, g ? matOf('#ff6a2a') : STEEL, .6));
+    } else {
+      put(eRod([10, c.c, 60], [14.6, c.c, 46.6], .9, fireOn(c) ? matOf('#8af0ff') : CERAMIC, .7));
+      if (fireOn(c)) put({ box:[[14,c.c - 1,45.5],[16,c.c + 1,47]], svg: `<circle cx="${f(P(14.8, c.c, 46.4)[0])}" cy="${f(P(14.8, c.c, 46.4)[1])}" r="2.2" fill="#8af0ff" opacity=".9"/>` }); }
+  }
+  // rocker shaft along the head, camshaft in the block, timing gears at the front
+  put(eRod([CX + 3.5, 12, 58.6], [CX + 3.5, 56, 58.6], .55, STEEL, .5));
+  put(eRod([CAMX, 12, CAMZ], [CAMX, 58.6, CAMZ], 1.1, STEEL, .6));
+  put(eDisc(CX, CZ, 58.6, 60.2, 3.8, BRASS, .8));
+  put(eDisc(CAMX, CAMZ, 58.6, 60.2, 7.6, BRASS, .9));
+  { const ca = -st.ang/2*Math.PI/180; put(eLine([[CAMX, 60.3, CAMZ], [CAMX + 6.5*Math.sin(ca), 60.3, CAMZ + 6.5*Math.cos(ca)]], '#8a6a2a', .3)); }
+  // flywheel with ring gear; starter pinion meshes it while cranking
+  put(eDisc(CX, CZ, 4, 7.5, 14, DSTEEL, 1.2));
+  { const fa = st.ang*Math.PI/180; put(eLine([[CX, 3.9, CZ], [CX + 11*Math.sin(fa), 3.9, CZ + 11*Math.cos(fa)]], '#3c4146', .4)); }
+  // oil pickup in the pan, oil level
+  put(eRod([CX, 30, 3], [CX, 30, 14], .8, STEEL, .5));
+  put({ box:[[8,12,6],[30,56,6.2]], svg: fill(pd(on(PZ(6.2), rectUV(8.3, 12.3, 29.7, 55.7))), '#b4892e', 'opacity=".55"') });
+  const sb = byDepth(P2), c1 = cs[0];
+  ENG_LABELS = k <= .6 ? '' : xrCallouts([
+    { at:[CX + BORE, CYLS[0], c1.crown - 3], text:'PISTON', on: run },
+    { at:[(CX + c1.px)/2, CYLS[0], (c1.wz + c1.pz)/2], text:'CONNECTING ROD', on: run },
+    { at:[CX, 60, CZ], text:'CRANKSHAFT', on: run || st.mode === 'crank' },
+    { at:[CAMX + 1, 40, CAMZ], text:'CAMSHAFT', on: run },
+    { at:[CAMX, CYLS[1] - 3.5, 45], text:'PUSHROD', on: run && cs[1].li > .05 },
+    { at:[(CX + CAMX)/2, CYLS[2] - 3.5, 58], text:'ROCKER ARM', on: run && cs[2].li > .05 },
+    { at:[CX, CYLS[0] - 3.5, 50], text:'INTAKE VALVE', on: run && c1.li > .05 },
+    { at:[CX, CYLS[0] + 3.5, 50], text:'EXHAUST VALVE', on: run && c1.le > .05 },
+    { at:[11, CYLS[1], 57], text: dsl ? 'INJECTOR' : 'SPARK PLUG', on: cs.some(fireOn) },
+    ...(dsl ? [{ at:[30, CYLS[2] + 4.5, 47.4], text:'GLOW PLUG', on: st.glow > 0 }, { at:[3, 27, 32], text:'INJECTION PUMP', on: run }]
+            : [{ at:[3, 26, 60], text:'IGNITION COIL', on: run }]),
+    { at:[CAMX + 5, 59, CAMZ + 4], text:'TIMING GEARS', on: run },
+    { at:[CX, 5, 32], text:'FLYWHEEL', on: run || st.mode === 'crank' },
+    { at:[19, 40, 4], text:'OIL PAN', on: false },
+  ], [0, eW, 0, eD, 0, eH]);
+  return sb;
+}
+
+function scene(st, m){
+  let s = castShadow([[4,0,0],[38,0,0],[38,72,0],[4,72,0],[6,10,46],[32,10,46],[32,58,46],[6,58,46],[2,69,64],[36,69,64],[2,72,64],[36,72,64]]);
+  const k = ease(st.xr || 0), body = byDepth(engBody(st, m));
+  if (k > 0) s += `<g opacity="${f(1 - .8*k)}">${body}</g><g opacity="${f(k)}">${engMech(st, k)}</g>` + ENG_LABELS;
+  else s += body + xrCallouts([
+    { at:[36, 71, 50], text:'RADIATOR', on: st.mode === 'run' },
+    { at:[38, 34, 64], text:'EXHAUST', on: st.mode === 'run' },
+    { at:[4, 34, 63], text:'AIR INTAKE', on: st.mode === 'run' },
+    { at:[37, 55, 44.5], text:'ALTERNATOR', on: st.mode === 'run' },
+    { at:[41, 9, 15], text:'STARTER', on: st.mode === 'crank' },
+    { at:[40, 30, 22], text:'OIL FILTER', on: false },
+    { at:[22, 30, 61], text:'VALVE COVER', on: false },
+    { at:[30, 40, 4], text:'OIL PAN', on: false },
+  ], [0, eW, 0, eD, 0, eH]);
+  return s;
+}
+
+/* ---------- behaviour ---------- */
+const RPM = { Idle: 1000, Half: 1800, Full: 2600 };
+let ui, loopOn = false;
+function engLoop(){
+  if (loopOn) return; loopOn = true;
+  ui.animate(dt => { const st = ui.st; st.t += dt;
+    if (st.mode === 'glow' && st.t > 1.6){ st.mode = 'crank'; st.t = 0; }
+    if (st.mode === 'crank' && st.t > 1.4){ st.mode = 'run'; st.t = 0; ui.flash(st.fuel === 'diesel' ? 'Running: fuel lights from the heat of compression' : 'Running: the spark plugs fire each cylinder in turn', 2200); }
+    if (st.mode === 'crank') st.glow = st.fuel === 'diesel' ? 1 : 0;
+    if (st.mode === 'run') st.glow = Math.max(0, st.glow - dt/2);
+    const target = st.mode === 'run' ? RPM[st.thr] : st.mode === 'crank' ? 250 : 0;
+    st.rpm += (target - st.rpm) * Math.min(1, dt*2.5); if (st.mode === 'off' && st.rpm < 15) st.rpm = 0;
+    // shown 40x slower than real so the strokes can be followed
+    st.ang = mod(st.ang + st.rpm*6/40*dt * (st.mode === 'crank' ? 3 : 1), 720);
+    const busy = st.mode !== 'off' || st.rpm > 0 || st.glow > 0; if (!busy) loopOn = false; return busy; });
+}
+function startStop(st){
+  if (st.mode === 'off'){ st.t = 0;
+    if (st.fuel === 'diesel'){ st.mode = 'glow'; st.glow = 1; ui.flash('Glow plugs heating the cylinders', 1500); }
+    else { st.mode = 'crank'; ui.flash('Starter cranking the flywheel', 1300); }
+  } else { st.mode = 'off'; st.glow = 0; ui.flash(st.fuel === 'diesel' ? 'Fuel cut off at the injection pump: engine stops' : 'Ignition off: engine stops', 1800); }
+  engLoop();
+}
+ui = mountFigure({
+  fig:'E1', turn:'full', title:'3-cylinder tractor diesel', palette:'mint',
+  size:[eW + 22, eD, eH], center:[eW/2, eD/2],
+  state:{ mode:'off', t:0, rpm:0, ang:30, thr:'Idle', fuel:'diesel', glow:0 },
+  scene,
+  stats: st => [{ label:'RPM', value: String(Math.round(st.rpm/10)*10) }, { label:'CYL 1', value: st.rpm > 0 ? strokeOf(st.ang) : '--', small:true }],
+  buttons:[
+    { label:'Start / Stop', onClick: st => startStop(st) },
+    { label:'Throttle', choices: st => Object.keys(RPM).map(n => ({ label:n, current: st.thr === n, onClick: st => { st.thr = n; if (st.mode === 'off') ui.flash('Set to ' + n + ' - start the engine to hear it'); engLoop(); } })) },
+    { label:'Fuel', choices: st => [['diesel','Diesel'], ['gas','Gas']].map(([v, n]) => ({ label:n, current: st.fuel === v, disabled: st.mode !== 'off', why:'Stop the engine before switching fuel', onClick: st => { st.fuel = v; } })) },
+  ],
+  acts:{ starter: st => startStop(st) },
+  params:(st, q) => { if (q.get('fuel') === 'gas') st.fuel = 'gas'; if (q.has('ang')) st.ang = +q.get('ang');
+    if (q.get('run') === '1'){ st.mode = 'run'; st.rpm = RPM[q.get('thr') || 'Idle'] || 1000; } if (q.get('glow') === '1') st.glow = 1; },
+});
+if (ui.st.mode === 'run' && new URLSearchParams(location.search).get('hold') !== '1') engLoop();
+xrMount(() => ui, () => '');
+</script></body></html>
